@@ -23,32 +23,31 @@ import numpy as np
 from mimoEnv.envs.mimo_env import MIMoEnv, DEFAULT_PROPRIOCEPTION_PARAMS, SCENE_DIRECTORY
 import mimoEnv.utils as env_utils
 from mimoActuation.actuation import SpringDamperModel
-
+from mimoTouch.touch import DiscreteTouch, TrimeshTouch
 
 TOUCH_PARAMS = {
     "scales": {
-        "left_foot": 0.05,
-        "right_foot": 0.05,
-        "left_lower_leg": 0.1,
-        "right_lower_leg": 0.1,
-        "left_upper_leg": 0.1,
-        "right_upper_leg": 0.1,
-        "hip": 0.1,
-        "lower_body": 0.1,
-        "upper_body": 0.1,
-        "head": 0.1,
-        "left_upper_arm": 0.01,
-        "left_lower_arm": 0.01,
-        "right_fingers": 0.01
+        "left_foot": 1.0,  # 0.05,
+        "right_foot": 1.0,  # 0.05,
+        "left_lower_leg": 1.0,  # 0.1,
+        "right_lower_leg": 1.0,  # 0.1,
+        "left_upper_leg": 1.0,  # 0.1,
+        "right_upper_leg": 1.0,  # 0.1,
+        "hip": 1.0,  # 0.1,
+        "lower_body": 1.0,  # 0.1,
+        "upper_body": 1.0,  # 0.1,
+        "head": 1.0,  # 0.1,
+        "left_upper_arm": 1.0,  # 0.01,
+        "left_lower_arm": 1.0,  # 0.01,
+        "right_fingers": 1.0,  # 0.01
     },
-    "touch_function": "force_vector",
+    "touch_function": "normal",
     "response_function": "spread_linear",
 }
 """ List of possible target bodies.
 
 :meta hide-value:
 """
-
 
 SITTING_POSITION = {
     "robot:hip_lean1": np.array([0.039088]), "robot:hip_rot1": np.array([0.113112]),
@@ -78,12 +77,30 @@ We need these not just for the initial position but also resetting the position 
 :meta hide-value:
 """
 
-
 SELFBODY_XML = os.path.join(SCENE_DIRECTORY, "selfbody_scene.xml")
 """ Path to the scene for this experiment.
 
 :meta hide-value:
 """
+
+
+class PainTouch(TrimeshTouch):
+    PAIN_THRESHOLD = 0.5
+
+    VALID_TOUCH_TYPES = {"normal": 1}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def normal(self, contact_id, body_id):
+        normal_forces = self.normal_force(contact_id, body_id)
+        normal = np.sqrt(np.power(normal_forces, 2).sum()).reshape((1,))
+        return normal
+
+    def get_touch_obs(self):
+        touch_obs = super().get_touch_obs()
+        touch_obs = np.maximum(touch_obs - self.PAIN_THRESHOLD, 0.0)
+        return touch_obs
 
 
 class MIMoSelfBodyPainEnv(MIMoEnv):
@@ -138,13 +155,24 @@ class MIMoSelfBodyPainEnv(MIMoEnv):
         env_utils.set_joint_qpos(self.model,
                                  self.data,
                                  "mimo_location",
-                                 np.array([0.0579584, -0.00157173, 0.0566738, 0.892294, -0.0284863, -0.450353, -0.0135029]))
+                                 np.array(
+                                     [0.0579584, -0.00157173, 0.0566738, 0.892294, -0.0284863, -0.450353, -0.0135029]))
         #  "mimo_location": np.array([0.0579584, -0.00157173, 0.0566738, 0.892294, -0.0284863, -0.450353, -0.0135029]),
         for joint_name in SITTING_POSITION:
             env_utils.lock_joint(self.model, joint_name, joint_angle=SITTING_POSITION[joint_name][0])
         # Let sim settle for a few timesteps to allow weld and locks to settle
         self.do_simulation(np.zeros(self.action_space.shape), 25)
         self.init_sitting_qpos = self.data.qpos.copy()
+
+    def touch_setup(self, touch_params):
+        """ Perform the setup and initialization of the touch system.
+
+        This should be overridden if you want to use another implementation!
+
+        Args:
+            touch_params (dict): The parameter dictionary.
+        """
+        self.touch = PainTouch(self, touch_params)
 
     def sample_goal(self):
         """Samples a new goal and returns it.
