@@ -76,3 +76,8 @@ register(id='MIMoComplianceTest-v0',
 register(id='MIMoComplianceMuscleTest-v0',
          entry_point='mimoEnv.envs:MIMoComplianceMuscleEnv',
          )
+
+register(id='MIMoFall-v0',
+         entry_point='mimoEnv.envs:MIMoFallEnv',
+         max_episode_steps=200,
+         )

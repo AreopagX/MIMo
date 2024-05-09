@@ -48,9 +48,11 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
     images = []
     im_counter = 0
 
+    if model is None:
+        print("No model loaded, taking random actions")
+
     for idx in range(test_for):
         if model is None:
-            print("No model, taking random actions")
             action = env.action_space.sample()
         else:
             action, _ = model.predict(obs)
@@ -58,7 +60,7 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
         if render_video:
             img = env.mujoco_renderer.render(render_mode="rgb_array")
             images.append(img)
-        if done or trunc:
+        if done or trunc or idx==(test_for-1):
             time.sleep(1)
             obs, _ = env.reset()
             if render_video:
@@ -99,7 +101,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', required=True,
-                        choices=['reach', 'standup', 'selfbody', 'pain', 'catch'],
+                        choices=['reach', 'standup', 'selfbody', 'catch', 'fall'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch"')
     parser.add_argument('--train_for', default=0, type=int,
@@ -108,7 +110,7 @@ def main():
                         help='Total timesteps of testing of trained policy')               
     parser.add_argument('--save_every', default=100000, type=int,
                         help='Number of timesteps between model saves')
-    parser.add_argument('--algorithm', default=None, type=str, required=True,
+    parser.add_argument('--algorithm', default=None, type=str,
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
@@ -132,6 +134,8 @@ def main():
     use_muscle = args.use_muscle
 
     save_dir = os.path.join("models", env_name, save_model)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
@@ -139,7 +143,8 @@ def main():
                  "standup": "MIMoStandup-v0",
                  "selfbody": "MIMoSelfBody-v0",
                  "catch": "MIMoCatch-v0",
-                 "pain": "MIMoSelfBodyPain-v0"}
+                 "pain": "MIMoSelfBodyPain-v0",
+                 "fall": "MIMoFall-v0"}
 
     env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
