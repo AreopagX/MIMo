@@ -11,15 +11,19 @@ ball drops some distance below MIMos hand or is bounced into the distance.
 There is a small negative reward for each step without touching the ball, a larger positive reward for each step in
 contact with the ball and then a large fixed reward on success.
 """
+import json
 import os
 import random
 
 import mujoco
 import numpy as np
+from gymnasium import spaces
 
-from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, DEFAULT_PROPRIOCEPTION_PARAMS, DEFAULT_TOUCH_PARAMS
+from mimoEnv import utils
+from mimoEnv.envs.mimo_env import MIMoEnv, SCENE_DIRECTORY, DEFAULT_PROPRIOCEPTION_PARAMS
 from mimoActuation.muscle import MuscleModel
 import mimoEnv.utils as env_utils
+from mimoTouch.touch import TrimeshTouch
 
 FALL_XML = os.path.join(SCENE_DIRECTORY, "fall_scene.xml")
 """ Path to the scene.
@@ -27,7 +31,62 @@ FALL_XML = os.path.join(SCENE_DIRECTORY, "fall_scene.xml")
 :meta hide-value:
 """
 
-FALL_INITIAL_QPOS = np.array([0.19,0.0013,0.051,0.65,-0.0022,-0.76,-0.0019,-0.0016,0.00023,0.12,-0.0045,-0.0049,0.13,0.097,-0.15,-0.091,-0.018,0.026,-0.011,-0.044,0.028,-0.0022,-0.36,0.065,-0.11,-0.22,-0.35,0.071,-0.065,-0.22,-0.39,0.058,-0.2,-0.3,-0.43,0.023,-0.033,-0.16,-0.083,0.003,0.0029,-0.47,-0.34,0.0012,-0.0022,-0.014,-0.084,0.0024,0.0022,-0.47,-0.34,0.0009,-0.0017,-0.014,0.0,0.0,0.5,0.0,0.0,0.0,0.0])
+FALL_INITIAL_QPOS = np.array(
+    [0.19, 0.0013, 0.051, 0.65, -0.0022, -0.76, -0.0019, -0.0016, 0.00023, 0.12, -0.0045, -0.0049, 0.13, 0.097, -0.15,
+     -0.091, -0.018, 0.026, -0.011, -0.044, 0.028, -0.0022, -0.36, 0.065, -0.11, -0.22, -0.35, 0.071, -0.065, -0.22,
+     -0.39, 0.058, -0.2, -0.3, -0.43, 0.023, -0.033, -0.16, -0.083, 0.003, 0.0029, -0.47, -0.34, 0.0012, -0.0022,
+     -0.014, -0.084, 0.0024, 0.0022, -0.47, -0.34, 0.0009, -0.0017, -0.014, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0])
+
+TOUCH_PARAMS = {
+    "scales": {
+        "left_toes": 0.10,
+        "right_toes": 0.10,
+        "left_foot": 0.15,
+        "right_foot": 0.15,
+        "left_lower_leg": 0.38,
+        "right_lower_leg": 0.38,
+        "left_upper_leg": 0.27,
+        "right_upper_leg": 0.27,
+        "hip": 0.25,
+        "lower_body": 0.25,
+        "upper_body": 0.30,
+        "head": 0.13,
+        "left_eye": 1.0,
+        "right_eye": 1.0,
+        "left_upper_arm": 0.24,
+        "right_upper_arm": 0.24,
+        "left_lower_arm": 0.24,
+        "right_lower_arm": 0.24,
+        "left_hand": 0.7,
+        "right_hand": 0.7,
+        "left_fingers": 0.2,
+        "right_fingers": 0.2,
+    },
+    "touch_function": "force_vector",
+    "response_function": "spread_linear",
+}
+
+PAIN_PARAMS = TOUCH_PARAMS.copy()
+PAIN_PARAMS["touch_function"] = "normal"
+
+
+class PainTouch(TrimeshTouch):
+    PAIN_THRESHOLD = 0.5
+
+    VALID_TOUCH_TYPES = {"normal": 1}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def normal(self, contact_id, body_id):
+        normal_forces = self.normal_force(contact_id, body_id)
+        normal = np.sqrt(np.power(normal_forces, 2).sum()).reshape((1,))
+        return normal
+
+    def get_touch_obs(self):
+        touch_obs = super().get_touch_obs()
+        touch_obs = np.maximum(touch_obs - self.PAIN_THRESHOLD, 0.0)
+        return touch_obs
 
 
 class MIMoFallEnv(MIMoEnv):
@@ -67,12 +126,17 @@ class MIMoFallEnv(MIMoEnv):
             modulo, i.e. to determine if MIMo held the ball on step `i`, do
             ``in_contact_past[i % steps_in_contact_for_success]``.
     """
+
+    touch_observations = {}
+    pain_observations = {}
+
     def __init__(self,
                  model_path=FALL_XML,
                  initial_qpos=None,
                  frame_skip=2,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
-                 touch_params=DEFAULT_TOUCH_PARAMS,
+                 touch_params=TOUCH_PARAMS,
+                 pain_params=PAIN_PARAMS,
                  vision_params=None,
                  vestibular_params=None,
                  actuation_model=MuscleModel,
@@ -80,6 +144,8 @@ class MIMoFallEnv(MIMoEnv):
                  done_active=True,
                  action_penalty=True,
                  **kwargs):
+
+        self.pain_params = pain_params
 
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
@@ -93,7 +159,7 @@ class MIMoFallEnv(MIMoEnv):
                          done_active=done_active,
                          default_camera_config=None,
                          **kwargs)
-        
+
         self.init_qpos = FALL_INITIAL_QPOS
 
         self.steps_in_contact_for_success = 100
@@ -116,7 +182,6 @@ class MIMoFallEnv(MIMoEnv):
         self.target_joint_qpos = env_utils.get_joint_qpos_addr(self.model, self.target_joint_id)
         self.target_joint_qvel = env_utils.get_joint_qvel_addr(self.model, self.target_joint_id)
 
-
     def compute_reward(self, achieved_goal, desired_goal, info):
         """ Computes the reward.
 
@@ -135,6 +200,49 @@ class MIMoFallEnv(MIMoEnv):
         reward = 0
         return reward
 
+    def _set_observation_space(self):
+        super()._set_observation_space()
+        obs = self._get_obs()
+        self.observation_space["pain"] = spaces.Box(-np.inf, np.inf, shape=obs["pain"].shape, dtype=np.float32)
+
+    def _env_setup(self):
+        super()._env_setup()
+        if self.pain_params is not None:
+            self.pain = PainTouch(self, self.pain_params)
+
+    def get_pain_obs(self):
+        obs = self.pain.get_touch_obs()
+        body_names = list(TOUCH_PARAMS["scales"].keys())
+        for body_name in body_names:
+            body_id = utils.get_body_id(self.pain.m_model, body_name=body_name)
+            output = self.pain.sensor_outputs[body_id]
+
+            omin = output.min()
+            oavg = output.mean()
+            omax = output.max()
+            if body_name in self.pain_observations.keys():
+                self.pain_observations[body_name].append((omin, oavg, omax))
+            else:
+                self.pain_observations[body_name] = [(omin, oavg, omax)]
+        return obs
+
+    def get_touch_obs(self):
+        obs = super().get_touch_obs()
+        body_names = list(TOUCH_PARAMS["scales"].keys())
+        for body_name in body_names:
+            body_id = utils.get_body_id(self.touch.m_model, body_name=body_name)
+            output = self.touch.sensor_outputs[body_id]
+            output = np.sqrt(np.power(output, 2).sum(axis=-1))
+            # self.summary_writer.add_scalars(f"episode {self.episode}/{body_name}", {str(idx): output[idx] for idx in range(len(output))}, self.steps)  # too many open files
+            omin = output.min()
+            oavg = output.mean()
+            omax = output.max()
+            if body_name in self.touch_observations.keys():
+                self.touch_observations[body_name].append((omin, oavg, omax))
+            else:
+                self.touch_observations[body_name] = [(omin, oavg, omax)]
+        return obs
+
     def _get_obs(self):
         """ Adds the size of the ball to the observations.
 
@@ -142,6 +250,7 @@ class MIMoFallEnv(MIMoEnv):
             Dict: The altered observation dictionary.
         """
         obs = super()._get_obs()
+        obs["pain"] = self.get_pain_obs()
         return obs
 
     def is_success(self, achieved_goal, desired_goal):
@@ -205,7 +314,18 @@ class MIMoFallEnv(MIMoEnv):
 
         self._step_callback()
         self.steps = 0
-    
+
+        touch_obs = np.array([self.touch_observations[bn] for bn in sorted(self.touch_observations.keys())])
+        pain_obs = np.array([self.pain_observations[bn] for bn in sorted(self.pain_observations.keys())])
+        if touch_obs.shape[1] > 10:
+            with open("touch_observations.npz", "wb") as f:
+                np.save(f, touch_obs)
+        if pain_obs.shape[1] > 10:
+            with open("pain_observations.npz", "wb") as f:
+                np.save(f, pain_obs)
+        self.touch_observations = {}
+        self.pain_observations = {}
+
         return self._get_obs()
 
     def _step_callback(self):
