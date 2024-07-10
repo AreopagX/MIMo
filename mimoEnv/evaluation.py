@@ -20,6 +20,7 @@ The available algorithms are ``PPO, SAC, TD3, DDPG, A2C``.
 """
 import csv
 import os
+from functools import partial
 from pathlib import Path
 
 import gymnasium as gym
@@ -35,6 +36,7 @@ import mimoEnv
 from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
+import types
 
 
 class InfoWriter:
@@ -43,6 +45,8 @@ class InfoWriter:
         self.buffer = []
 
     def flush(self):
+        if len(self.buffer) == 0:
+            return
         write_header = not self.file.exists()
         with open(self.file, "a") as f:
             csv_writer = csv.DictWriter(f, fieldnames=self.buffer[0].keys())
@@ -52,7 +56,7 @@ class InfoWriter:
             self.buffer = []
 
     def append(self, data):
-        self.buffer.append(data)
+        self.buffer.append(data.copy())
         if len(self.buffer) > 1000:
             self.flush()
 
@@ -104,64 +108,30 @@ class InfoWriterCallback(BaseCallback):
         self.global_step += 1
         return True
 
+def overwrite_sample_goal(self, target_geom_idx = None):
+    """Samples a new goal and returns it.
 
-def test(env, save_dir, test_for=1000, model=None, render_video=False):
-    """ Testing function to view the behaviour of a model.
+    The goal consists of a target geom that we try to touch, returned as a one-hot encoding.
+    We also populate :attr:`.target_geom` and :attr:`.target_body`. which are used by other functions.
 
-    Args:
-        env (MIMoEnv): The environment on which the model should be tested. This does not have to be the same training
-            environment, but action and observation spaces must match.
-        save_dir (str): The directory in which any rendered videos will be saved.
-        test_for (int): The number of timesteps the testing runs in total. This will be broken into multiple episodes
-            if necessary.
-        model:  The stable baselines model object. If ``None`` we take random actions instead. Default ``None``.
-        render_video (bool): If ``True``, all episodes during testing will be recorded and saved as videos in
-            `save_dir`.
+    Returns:
+        numpy.ndarray: The target geom in a one hot encoding.
     """
-    obs, _ = env.reset()
-    images = []
-    im_counter = 0
+    # randomly select geom as target (except for 2 latest geoms that correspond to fingers)
+    active_geom_codes = list(self.touch.sensor_outputs.keys())
+    if target_geom_idx is None:
+        target_geom_idx = np.random.randint(len(active_geom_codes) - 2)
+    self.target_geom = active_geom_codes[int(target_geom_idx)]
+    # We want the output of the desired goal as a one hot encoding,
+    # rather than the raw index
+    target_geom_onehot = np.zeros(37)  # 36 geoms in MIMo
+    if isinstance(self.target_geom, int):
+        target_geom_onehot[self.target_geom] = 1
 
-    if model is None:
-        print("No model loaded, taking random actions")
-
-    #tb_formatter = next(formatter for formatter in model.logger.output_formats if isinstance(formatter,
-    #                                                                                         TensorBoardOutputFormat))
-    info_writer = InfoWriter(f"{save_dir}/test_info.csv")
-
-    for idx in range(test_for):
-        if model is None:
-            action = env.action_space.sample()
-        else:
-            action, _ = model.predict(obs)
-        obs, _, done, trunc, info = env.step(action)
-
-        #for key, value in info["logging"].items():
-        #tb_formatter.write(info["logging"], {}, idx)
-        data = info["logging"]
-        data = {f"test.{key}": value for key, value in data.items()}
-        data["test.global_step"] = idx
-        #tb_formatter.writer.add_scalars("info", data, idx)
-        info_writer.append(data)
-
-        if render_video:
-            img = env.mujoco_renderer.render(render_mode="rgb_array")
-            images.append(img)
-        if done or trunc or idx == (test_for - 1):
-            time.sleep(1)
-            if render_video:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                video = cv2.VideoWriter(os.path.join(save_dir, 'episode_{}.avi'.format(im_counter)), fourcc, 50,
-                                        (500, 500))
-                for img in images:
-                    video.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                cv2.destroyAllWindows()
-                video.release()
-                images = []
-                im_counter += 1
-            obs, _ = env.reset()
-
-    env.reset()
+    self.target_body = self.model.body(self.model.geom(self.target_geom).bodyid).name
+    self.logging_values["target_name"] = self.target_body
+    self.logging_values["target_index"] = self.target_geom
+    return target_geom_onehot
 
 
 def main():
@@ -191,47 +161,40 @@ def main():
                         choices=['reach', 'standup', 'selfbody', 'catch', 'fall', "pain"],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch"')
-    parser.add_argument('--train_for', default=0, type=int,
-                        help='Total timesteps of training')
     parser.add_argument('--test_for', default=1000, type=int,
                         help='Total timesteps of testing of trained policy')
-    parser.add_argument('--save_every', default=100000, type=int,
-                        help='Number of timesteps between model saves')
     parser.add_argument('--algorithm', default=None, type=str,
                         choices=['PPO', 'SAC', 'TD3', 'DDPG', 'A2C', 'HER'],
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
                         help='Name of model to load')
-    parser.add_argument('--save_model', default='', type=str,
-                        help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
+    parser.add_argument('--info', default="info", type=str,
+                        help='Filename used to save the evaluation info.')
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Make the policy prediction deterministic.")
 
     args = parser.parse_args()
     env_name = args.env
     algorithm = args.algorithm
     load_model = args.load_model
-    save_model = args.save_model
-    save_every = args.save_every
-    train_for = args.train_for
     test_for = args.test_for
     render = args.render_video
     use_muscle = args.use_muscle
+    info_filename = args.info
+    deterministic = args.deterministic
 
-    save_dir = os.path.join("models", env_name, save_model)
+    save_dir = os.path.join("models", env_name)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
-    env_names = {"reach": "MIMoReach-v0",
-                 "standup": "MIMoStandup-v0",
-                 "selfbody": "MIMoSelfBody-v0",
-                 "catch": "MIMoCatch-v0",
-                 "pain": "MIMoSelfBodyPain-v0",
-                 "fall": "MIMoFall-v0"}
+    env_names = {"selfbody": "MIMoSelfBody-v0",
+                 "pain": "MIMoSelfBodyPain-v0"}
 
     env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
@@ -247,30 +210,74 @@ def main():
     elif algorithm == 'A2C':
         from stable_baselines3 import A2C as RL
 
-    # load pretrained model or create new one
-    if algorithm is None:
-        model = None
-    elif load_model:
-        model = RL.load(load_model, env)
-    else:
-        model = RL("MultiInputPolicy", env,
-                   tensorboard_log=save_dir,
-                   verbose=1)
+    # load pretrained model
+    model = RL.load(load_model, env)
 
-    # train model
-    counter = 0
-    global_step = 0
-    while train_for > 0:
-        counter += 1
-        train_for_iter = min(train_for, save_every)
-        train_for = train_for - train_for_iter
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False,
-                    callback=InfoWriterCallback(f"{save_dir}/train_info.csv", global_step))
-        model.save(os.path.join(save_dir, "model_" + str(counter)))
-        global_step += train_for_iter
+    right_arm_joints = [
+        "robot:right_shoulder_horizontal", "robot:right_shoulder_ad_ab",
+        "robot:right_shoulder_rotation", "robot:right_elbow",
+        "robot:right_hand1", "robot:right_hand2", "robot:right_hand3",
+        "robot:right_fingers"
+    ]
+    right_arm_indices = [env.data.joint(joint).id + 6 for joint in right_arm_joints]
+    init_qpos = np.array([env.data.qpos[id] for id in right_arm_indices])
 
-    test(env, save_dir, model=model, test_for=test_for, render_video=render)
+    info_writer = InfoWriter(f"{save_dir}/{info_filename}.csv")
 
+    for target_geom_idx in range(11):
+        print(f"target_geom_idx: {target_geom_idx}")
+
+        images = []
+        im_counter = 0
+
+        func = types.MethodType(partial(overwrite_sample_goal, target_geom_idx=target_geom_idx), env)
+        env.unwrapped.sample_goal = func
+
+        for initdx in range(20):
+            np.random.seed(initdx)
+            mod_qpos = init_qpos + 0.1 * np.random.randn(*init_qpos.shape)
+
+
+            qpos = env.init_sitting_qpos
+            qpos[right_arm_indices] = mod_qpos
+            env.reset()
+            obs = env.reset_model(qpos)
+
+            for idx in range(500):
+                if model is None:
+                    action = env.action_space.sample()
+                else:
+                    action, _ = model.predict(obs, deterministic=deterministic)
+                obs, _, done, trunc, info = env.step(action)
+
+                data = info["logging"]
+                data["success"] = int(info["is_success"])
+                data["global_step"] = idx
+                data["seed"] = initdx
+                info_writer.append(data)
+
+                if deterministic and (done or trunc):
+                    break
+
+                if render:
+                    img = env.mujoco_renderer.render(render_mode="rgb_array")
+                    images.append(img)
+                if done or trunc or idx == (test_for - 1):
+                    time.sleep(1)
+                    if render:
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        video = cv2.VideoWriter(
+                            os.path.join(save_dir, f"episode_{info_filename}_{target_geom_idx}_{im_counter}.avi"),
+                            fourcc, 50, (500, 500)
+                        )
+                        for img in images:
+                            video.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                        cv2.destroyAllWindows()
+                        video.release()
+                        images = []
+                        im_counter += 1
+
+    info_writer.flush()
 
 if __name__ == '__main__':
     main()

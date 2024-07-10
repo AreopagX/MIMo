@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from mimoEnv.envs.fall import TOUCH_PARAMS
+from mimoEnv.envs.selfbodypain import PAIN_PARAMS
 import matplotlib.pyplot as plt
 import seaborn.objects as so
 import seaborn as sns
@@ -32,33 +33,39 @@ body_to_plot_idx = {
     "right_upper_leg": 5,
 }
 
-body_names = sorted(TOUCH_PARAMS["scales"].keys())
-touch_obs = np.load("touch_observations.npz")
-pain_obs = np.load("pain_observations.npz")
+body_names = sorted(PAIN_PARAMS["scales"].keys())
+touch_obs = np.load("models/pain/touch_observations_0.npz")
+#pain_obs = np.load("models/pain/pain_observations_0.npz")
 
 print()
+
+T = touch_obs.shape[1]
 
 fig, axes = plt.subplots(2, 3)
 axes = axes.flatten()
 
 colors = sns.color_palette("hls", len(body_names))
 for i in range(6):
-    p = so.Plot(x=np.arange(101)).label(x="Timestep", y="Average Force on Body Part", color="").limit(y=(0, 1000))
+    p = so.Plot(x=np.arange(T + 1)).label(x="Timestep", y="Average Force / Pain on Body Part", color="").limit(y=(0, 1000))
     for body_name in body_to_plot_idx.keys():
         if body_to_plot_idx[body_name] != i:
             continue
+        if body_name not in body_names:
+            continue
         idx = body_names.index(body_name)
         touch_ob = touch_obs[idx]
-        p = p.add(so.Line(color=colors[idx]), y=touch_ob[:, 1], label=body_name)
-        #p = p.add(so.Band(), ymin=touch_ob[:, 0], ymax=touch_ob[:, 2] + 10.0)
+        p = p.add(so.Line(color=colors[idx]), y=touch_ob[:, 1], label=f"{body_name} force")
+
+        #pain_ob = pain_obs[idx]
+        #p = p.add(so.Line(color=colors[idx], alpha=0.5, linestyle="--"), y=pain_ob[:, 1], label=f"{body_name} pain")
+        #p = p.add(so.Band(), ymin=touch_ob[:, 0], ymax=touch_ob[:, 2])
     p.on(axes[i]).plot()
 
     # hacky solution to move legend
-    l1 = fig.legends.pop(0)
-    axes[i].legend(l1.legend_handles, [t.get_text() for t in l1.texts])
+    if len(fig.legends) > 0:
+        l1 = fig.legends.pop(0)
+        axes[i].legend(l1.legend_handles, [t.get_text() for t in l1.texts])
 
 fig.show()
 
-fig, axes = plt.subplots(2, 3)
-axes = axes.flatten()
-print()
+plt.show()

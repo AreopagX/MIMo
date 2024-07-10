@@ -19,30 +19,56 @@ defined in :data:`SELFBODY_XML`.
 
 import os
 import numpy as np
+from gymnasium import spaces
 
+from mimoEnv.envs import MIMoSelfBodyEnv
 from mimoEnv.envs.mimo_env import MIMoEnv, DEFAULT_PROPRIOCEPTION_PARAMS, SCENE_DIRECTORY
 import mimoEnv.utils as env_utils
 from mimoActuation.actuation import SpringDamperModel
-from mimoTouch.touch import DiscreteTouch, TrimeshTouch
+from mimoEnv.envs.pain_touch import PainTouch
 
 TOUCH_PARAMS = {
     "scales": {
-        "left_foot": 1.0,  # 0.05,
-        "right_foot": 1.0,  # 0.05,
-        "left_lower_leg": 1.0,  # 0.1,
-        "right_lower_leg": 1.0,  # 0.1,
-        "left_upper_leg": 1.0,  # 0.1,
-        "right_upper_leg": 1.0,  # 0.1,
-        "hip": 1.0,  # 0.1,
-        "lower_body": 1.0,  # 0.1,
-        "upper_body": 1.0,  # 0.1,
-        "head": 1.0,  # 0.1,
-        "left_upper_arm": 1.0,  # 0.01,
-        "left_lower_arm": 1.0,  # 0.01,
-        "right_fingers": 1.0,  # 0.01
+        "left_foot": 0.05,
+        "right_foot": 0.05,
+        "left_lower_leg": 0.1,
+        "right_lower_leg": 0.1,
+        "left_upper_leg": 0.1,
+        "right_upper_leg": 0.1,
+        "hip": 0.1,
+        "lower_body": 0.1,
+        "upper_body": 0.1,
+        "head": 0.1,
+        "left_upper_arm": 0.01,
+        "left_lower_arm": 0.01,
+        "right_fingers": 0.01
+    },
+    "touch_function": "force_vector",
+    "response_function": "spread_linear",
+}
+""" List of possible target bodies.
+
+:meta hide-value:
+"""
+
+PAIN_PARAMS = {
+    "scales": {
+        "left_foot": 0.05,
+        "right_foot": 0.05,
+        "left_lower_leg": 0.1,
+        "right_lower_leg": 0.1,
+        "left_upper_leg": 0.1,
+        "right_upper_leg": 0.1,
+        "hip": 0.1,
+        "lower_body": 0.1,
+        "upper_body": 0.1,
+        "head": 0.1,
+        "left_upper_arm": 0.01,
+        "left_lower_arm": 0.01,
     },
     "touch_function": "normal",
     "response_function": "spread_linear",
+    "extend_observation_space": False
 }
 """ List of possible target bodies.
 
@@ -77,6 +103,7 @@ We need these not just for the initial position but also resetting the position 
 :meta hide-value:
 """
 
+
 SELFBODY_XML = os.path.join(SCENE_DIRECTORY, "selfbody_scene.xml")
 """ Path to the scene for this experiment.
 
@@ -84,26 +111,7 @@ SELFBODY_XML = os.path.join(SCENE_DIRECTORY, "selfbody_scene.xml")
 """
 
 
-class PainTouch(TrimeshTouch):
-    PAIN_THRESHOLD = 0.5
-
-    VALID_TOUCH_TYPES = {"normal": 1}
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def normal(self, contact_id, body_id):
-        normal_forces = self.normal_force(contact_id, body_id)
-        normal = np.sqrt(np.power(normal_forces, 2).sum()).reshape((1,))
-        return normal
-
-    def get_touch_obs(self):
-        touch_obs = super().get_touch_obs()
-        touch_obs = np.maximum(touch_obs - self.PAIN_THRESHOLD, 0.0)
-        return touch_obs
-
-
-class MIMoSelfBodyPainEnv(MIMoEnv):
+class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
     """ MIMo learns about his own body.
 
     MIMo is tasked with touching a given part of his body using his right arm.
@@ -120,12 +128,16 @@ class MIMoSelfBodyPainEnv(MIMoEnv):
         init_sitting_qpos (numpy.ndarray): The initial position.
     """
 
+    touch_observations = {}
+    pain_observations = {}
+
     def __init__(self,
                  model_path=SELFBODY_XML,
                  initial_qpos=SITTING_POSITION,
                  frame_skip=1,
                  proprio_params=DEFAULT_PROPRIOCEPTION_PARAMS,
                  touch_params=TOUCH_PARAMS,
+                 pain_params=PAIN_PARAMS,
                  vision_params=None,
                  vestibular_params=None,
                  actuation_model=SpringDamperModel,
@@ -134,9 +146,7 @@ class MIMoSelfBodyPainEnv(MIMoEnv):
                  **kwargs,
                  ):
 
-        self.target_geom = 0  # The geom on MIMo we are trying to touch
-        self.target_body = ""  # The body that the goal geom belongs to
-        self.goal = np.zeros(37)
+        self.pain_params = pain_params
 
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
@@ -150,69 +160,60 @@ class MIMoSelfBodyPainEnv(MIMoEnv):
                          done_active=done_active,
                          **kwargs)
 
-        print("Using MIMoSelfBodyPainEnv")
+    def _env_setup(self):
+        super()._env_setup()
+        if self.pain_params is not None:
+            self.pain = PainTouch(self, self.pain_params)
 
-        env_utils.set_joint_qpos(self.model,
-                                 self.data,
-                                 "mimo_location",
-                                 np.array(
-                                     [0.0579584, -0.00157173, 0.0566738, 0.892294, -0.0284863, -0.450353, -0.0135029]))
-        #  "mimo_location": np.array([0.0579584, -0.00157173, 0.0566738, 0.892294, -0.0284863, -0.450353, -0.0135029]),
-        for joint_name in SITTING_POSITION:
-            env_utils.lock_joint(self.model, joint_name, joint_angle=SITTING_POSITION[joint_name][0])
-        # Let sim settle for a few timesteps to allow weld and locks to settle
-        self.do_simulation(np.zeros(self.action_space.shape), 25)
-        self.init_sitting_qpos = self.data.qpos.copy()
+    def get_pain_obs(self):
+        obs = self.pain.get_touch_obs()
+        """body_names = list(PAIN_PARAMS["scales"].keys())
+        for body_name in body_names:
+            body_id = env_utils.get_body_id(self.pain.m_model, body_name=body_name)
+            output = self.pain.sensor_outputs[body_id]
 
-    def touch_setup(self, touch_params):
-        """ Perform the setup and initialization of the touch system.
+            omin = output.min()
+            oavg = output.mean()
+            omax = output.max()
+            if body_name in self.pain_observations.keys():
+                self.pain_observations[body_name].append((omin, oavg, omax))
+            else:
+                self.pain_observations[body_name] = [(omin, oavg, omax)]"""
+        return obs
 
-        This should be overridden if you want to use another implementation!
+    def get_touch_obs(self):
+        obs = super().get_touch_obs()
+        """body_names = list(TOUCH_PARAMS["scales"].keys())
+        for body_name in body_names:
+            body_id = env_utils.get_body_id(self.touch.m_model, body_name=body_name)
+            output = self.touch.sensor_outputs[body_id]
+            output = np.sqrt(np.power(output, 2).sum(axis=-1))
+            # self.summary_writer.add_scalars(f"episode {self.episode}/{body_name}", {str(idx): output[idx] for idx in range(len(output))}, self.steps)  # too many open files
+            omin = output.min()
+            oavg = output.mean()
+            omax = output.max()
+            if body_name in self.touch_observations.keys():
+                self.touch_observations[body_name].append((omin, oavg, omax))
+            else:
+                self.touch_observations[body_name] = [(omin, oavg, omax)]"""
+        return obs
 
-        Args:
-            touch_params (dict): The parameter dictionary.
-        """
-        self.touch = PainTouch(self, touch_params)
+    def _set_observation_space(self):
+        super()._set_observation_space()
+        obs = self._get_obs()
+        if self.pain_params["extend_observation_space"]:
+            self.observation_space["pain"] = spaces.Box(-np.inf, np.inf, shape=obs["pain"].shape, dtype=np.float32)
 
-    def sample_goal(self):
-        """Samples a new goal and returns it.
-
-        The goal consists of a target geom that we try to touch, returned as a one-hot encoding.
-        We also populate :attr:`.target_geom` and :attr:`.target_body`. which are used by other functions.
-
-        Returns:
-            numpy.ndarray: The target geom in a one hot encoding.
-        """
-        # randomly select geom as target (except for 2 latest geoms that correspond to fingers)
-        active_geom_codes = list(self.touch.sensor_outputs.keys())
-        target_geom_idx = np.random.randint(len(active_geom_codes) - 2)
-        self.target_geom = active_geom_codes[int(target_geom_idx)]
-        # We want the output of the desired goal as a one hot encoding,
-        # rather than the raw index
-        target_geom_onehot = np.zeros(37)  # 36 geoms in MIMo
-        if isinstance(self.target_geom, int):
-            target_geom_onehot[self.target_geom] = 1
-
-        self.target_body = self.model.body(self.model.geom(self.target_geom).bodyid).name
-        return target_geom_onehot
-
-    def is_success(self, achieved_goal, desired_goal):
-        """ We have succeeded when we have a touch sensation on the goal body.
-
-        We ignore the :attr:`.goal` attribute in this for performance reasons and determine the success condition
-        using :attr:`.target_geom` instead. This allows us to save a number of array operations each step.
-
-        Args:
-            achieved_goal (object): This parameter is ignored.
-            desired_goal (object): This parameter is ignored.
+    def _get_obs(self):
+        """ Adds the size of the ball to the observations.
 
         Returns:
-            bool: If MIMo has touched the target geom.
+            Dict: The altered observation dictionary.
         """
-        # check if contact with target geom:
-        target_geom_touch_max = np.max(self.touch.sensor_outputs[self.target_geom])
-        contact_with_target_geom = (target_geom_touch_max > 0)
-        return contact_with_target_geom
+        obs = super()._get_obs()
+        if self.pain_params["extend_observation_space"]:
+            obs["pain"] = self.get_pain_obs()
+        return obs
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         """ Computes the reward each step.
@@ -240,55 +241,40 @@ class MIMoSelfBodyPainEnv(MIMoEnv):
         )
         contact_with_fingers = (fingers_touch_max > 0)
 
+        # pain_penalty =  # v1
+        # pain_penalty = ((self.get_pain_obs().max() // 10) + 1) * 10 # v2
+        pain_penalty = 50.0 * (self.get_pain_obs().max() > 0.0)
+
         # compute reward:
         if info["is_success"]:
-            reward = 500
+            reward = 500 - pain_penalty
+
+            self.logging_values["reward"] = reward
+            self.logging_values["reward.without_pain"] = 500
+            self.logging_values["reward.pain_penalty"] = pain_penalty
         elif contact_with_fingers:
             target_body_pos = self.data.body(self.target_body).xpos
             fingers_pos = self.data.body("right_fingers").xpos
             distance = np.linalg.norm(fingers_pos - target_body_pos)
-            reward = -distance
+            reward = - distance - pain_penalty
+
+            self.logging_values["reward"] = reward
+            self.logging_values["reward.without_pain"] = -distance
+            self.logging_values["reward.pain_penalty"] = pain_penalty
         else:
             reward = -1
+            self.logging_values["reward"] = reward
+            self.logging_values["reward.without_pain"] = reward
+            self.logging_values["reward.pain_penalty"] = 0
 
         return reward
 
-    def reset_model(self):
+    def reset_model(self, *args, **kwargs):
         """ Reset to the initial sitting position.
 
         Returns:
             Dict: Observations after reset.
         """
-        # set qpos as new initial position and velocity as zero
-        qpos = self.init_sitting_qpos
-        qvel = np.zeros(self.data.qvel.shape)
-        self.set_state(qpos, qvel)
-        return self._get_obs()
-
-    def is_failure(self, achieved_goal, desired_goal):
-        """ Dummy function that always returns ``False``.
-
-        Args:
-            achieved_goal (object): This parameter is ignored.
-            desired_goal (object): This parameter is ignored.
-
-        Returns:
-            bool: ``False``.
-        """
-        return False
-
-    def is_truncated(self):
-        """ Dummy function. Always returns ``False``.
-
-        Returns:
-            bool: ``False``.
-        """
-        return False
-
-    def get_achieved_goal(self):
-        """ Dummy function that returns an empty array.
-
-        Returns:
-            numpy.ndarray: An empty array.
-        """
-        return np.zeros(self.goal.shape)
+        self.touch_observations.clear()
+        self.pain_observations.clear()
+        return super().reset_model(*args, **kwargs)

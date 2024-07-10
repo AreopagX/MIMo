@@ -120,6 +120,7 @@ class MIMoSelfBodyEnv(MIMoEnv):
         self.target_geom = 0  # The geom on MIMo we are trying to touch
         self.target_body = ""  # The body that the goal geom belongs to
         self.goal = np.zeros(37)
+        self.logging_values = {}
 
         super().__init__(model_path=model_path,
                          initial_qpos=initial_qpos,
@@ -164,6 +165,8 @@ class MIMoSelfBodyEnv(MIMoEnv):
             target_geom_onehot[self.target_geom] = 1
 
         self.target_body = self.model.body(self.model.geom(self.target_geom).bodyid).name
+        self.logging_values["target_name"] = self.target_body
+        self.logging_values["target_index"] = self.target_geom
         return target_geom_onehot
 
     def is_success(self, achieved_goal, desired_goal):
@@ -221,16 +224,19 @@ class MIMoSelfBodyEnv(MIMoEnv):
         else:
             reward = -1
 
+        self.logging_values["reward"] = reward
+
         return reward
 
-    def reset_model(self):
+    def reset_model(self, qpos=None):
         """ Reset to the initial sitting position.
 
         Returns:
             Dict: Observations after reset.
         """
         # set qpos as new initial position and velocity as zero
-        qpos = self.init_sitting_qpos
+        if qpos is None:
+            qpos = self.init_sitting_qpos
         qvel = np.zeros(self.data.qvel.shape)
         self.set_state(qpos, qvel)
         return self._get_obs()
@@ -262,3 +268,25 @@ class MIMoSelfBodyEnv(MIMoEnv):
             numpy.ndarray: An empty array.
         """
         return np.zeros(self.goal.shape)
+
+    def get_touch_obs(self):
+        obs = super().get_touch_obs()
+        self.logging_values["touch.avg"] = obs.mean()
+        self.logging_values["touch.min"] = obs.min()
+        self.logging_values["touch.max"] = obs.max()
+        return obs
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        right_arm_joints = [
+            "robot:right_shoulder_horizontal", "robot:right_shoulder_ad_ab",
+            "robot:right_shoulder_rotation", "robot:right_elbow",
+            "robot:right_hand1", "robot:right_hand2", "robot:right_hand3",
+            "robot:right_fingers"
+        ]
+        qvel = [abs(self.data.joint(joint).qvel[0]) for joint in right_arm_joints]
+        self.logging_values["qvel"] = sum(qvel) / len(qvel)
+        for joint in right_arm_joints:
+            self.logging_values[joint.replace("robot:", "qvel_")] = self.data.joint(joint).qvel[0]
+        info["logging"] = self.logging_values
+        return obs, reward, terminated, truncated, info
