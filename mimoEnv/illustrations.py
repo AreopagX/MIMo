@@ -24,8 +24,8 @@ import gymnasium as gym
 import time
 import argparse
 import cv2
+from stable_baselines3.common.callbacks import CheckpointCallback
 
-import mimoEnv
 from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
@@ -165,13 +165,17 @@ def main():
                    verbose=1)
 
     # train model
-    counter = 0
-    while train_for > 0:
-        counter += 1
-        train_for_iter = min(train_for, save_every)
-        train_for = train_for - train_for_iter
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
-        model.save(os.path.join(save_dir, "model_" + str(counter)))
+    model.learn(
+        total_timesteps=train_for, reset_num_timesteps=False,
+        callback=[
+            CheckpointCallback(
+                save_freq=save_every,
+                save_path=save_dir,
+                name_prefix="model",
+            )
+        ]
+    )
+    model.save(os.path.join(save_dir, "model_final"))
 
     test(env, save_dir, model=model, test_for=test_for, render_video=render)
 
