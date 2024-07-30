@@ -220,7 +220,7 @@ def main():
         "robot:right_fingers"
     ]
     right_arm_indices = [env.data.joint(joint).id + 6 for joint in right_arm_joints]
-    init_qpos = np.array([env.data.qpos[id] for id in right_arm_indices])
+    #init_qpos = np.array([env.data.qpos[id] for id in right_arm_indices])
 
     info_writer = InfoWriter(f"{save_dir}/{info_filename}.csv")
 
@@ -234,14 +234,15 @@ def main():
         env.unwrapped.sample_goal = func
 
         for initdx in range(20):
-            np.random.seed(initdx)
+            """np.random.seed(initdx)
             mod_qpos = init_qpos + 0.1 * np.random.randn(*init_qpos.shape)
 
 
             qpos = env.init_sitting_qpos
-            qpos[right_arm_indices] = mod_qpos
-            env.reset()
-            obs = env.reset_model(qpos)
+            qpos[right_arm_indices] = mod_qpos"""
+            np.random.seed(initdx)
+            obs, _ = env.reset()
+            # obs = env.reset_model(qpos)
 
             for idx in range(500):
                 if model is None:

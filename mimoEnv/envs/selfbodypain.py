@@ -143,6 +143,7 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
                  actuation_model=SpringDamperModel,
                  goals_in_observation=True,
                  done_active=True,
+                 randomize_qpos=True,
                  **kwargs,
                  ):
 
@@ -158,6 +159,7 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
                          actuation_model=actuation_model,
                          goals_in_observation=goals_in_observation,
                          done_active=done_active,
+                         randomize_qpos=randomize_qpos,
                          **kwargs)
 
     def _env_setup(self):

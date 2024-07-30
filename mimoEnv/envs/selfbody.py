@@ -114,12 +114,14 @@ class MIMoSelfBodyEnv(MIMoEnv):
                  actuation_model=SpringDamperModel,
                  goals_in_observation=True,
                  done_active=True,
+                 randomize_qpos=False,
                  **kwargs,
                  ):
 
         self.target_geom = 0  # The geom on MIMo we are trying to touch
         self.target_body = ""  # The body that the goal geom belongs to
         self.goal = np.zeros(37)
+        self.randomize_qpos = randomize_qpos
         self.logging_values = {}
 
         super().__init__(model_path=model_path,
@@ -228,16 +230,38 @@ class MIMoSelfBodyEnv(MIMoEnv):
 
         return reward
 
-    def reset_model(self, qpos=None):
+    def reset_model(self):
         """ Reset to the initial sitting position.
 
         Returns:
             Dict: Observations after reset.
         """
         # set qpos as new initial position and velocity as zero
-        if qpos is None:
-            qpos = self.init_sitting_qpos
+        qpos = self.init_sitting_qpos.copy()
         qvel = np.zeros(self.data.qvel.shape)
+
+        # optionally randomize initial qpos
+        if self.randomize_qpos:
+            right_arm_joints = [
+                "robot:right_shoulder_horizontal", "robot:right_shoulder_ad_ab",
+                "robot:right_shoulder_rotation", "robot:right_elbow",
+                "robot:right_hand1", "robot:right_hand2", "robot:right_hand3",
+                "robot:right_fingers"
+            ]
+            # "normal" ranges (min, max) for each joint
+            ranges = np.array([
+                [-0.4, 1.0],
+                [-0.2, 2.0],
+                [-1.0, 1.0],
+                [-2.0, 0.0],
+                [-1.5, 1.5],
+                [-1.2, 1.2],
+                [-0.5, 0.5],
+                [-2.0, 0.0]
+            ])
+            right_arm_indices = [self.data.joint(joint).id + 6 for joint in right_arm_joints]
+            qpos[right_arm_indices] += 0.3 * np.random.randn(len(right_arm_indices))
+            qpos[right_arm_indices] = np.clip(qpos[right_arm_indices], ranges[:, 0], ranges[:, 1])
         self.set_state(qpos, qvel)
         return self._get_obs()
 

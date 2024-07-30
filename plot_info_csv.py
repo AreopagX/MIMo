@@ -19,15 +19,15 @@ def read_dfs(root_dir, name, versions, filename, stage):
         for i in range(versions)
     ])
 
-root_dir = Path("/home/dustin/Documents/Uni/GU/Thesis/MIMo/models")
-baseline_dir = root_dir / "selfbody"
-pain_dir = root_dir / "pain"
+root_dir = Path("/home/dustin/Documents/Uni/GU/Thesis/MIMo/models/retrained_new_ckpts")
+baseline_dir = root_dir
+pain_dir = root_dir
 
 baseline_train_df = read_dfs(root_dir, "baseline", 3, "train_info.csv", "train")
 
-pain_v1_train_dfs = read_dfs(root_dir, "pain_v1", 3, "train_info.csv", "train")
-pain_v2_train_dfs = read_dfs(root_dir, "pain_v2", 3, "train_info.csv", "train")
-pain_v3_train_dfs = read_dfs(root_dir, "pain_v3", 3, "train_info.csv", "train")
+pain_train_dfs = read_dfs(root_dir, "pain", 3, "train_info.csv", "train")
+#pain_v2_train_dfs = read_dfs(root_dir, "pain_v2", 3, "train_info.csv", "train")
+#pain_v3_train_dfs = read_dfs(root_dir, "pain_v3", 3, "train_info.csv", "train")
 
 """
 baseline_test_dfs = [
@@ -42,10 +42,11 @@ read_df(root_dir / suffix, "test_info.csv", "test", "pain") for suffix in
 pain_test_df = pd.concat(pain_test_dfs)"""
 
 #train_df = pd.merge(baseline_train_df, pain_train_df, on="global_step")
-train_df = pd.concat([baseline_train_df, pain_v1_train_dfs, pain_v2_train_dfs, pain_v3_train_dfs])
+train_df = pd.concat([baseline_train_df, pain_train_dfs])
 train_df.set_index("global_step")
 train_df["global_step_1k"] = train_df["global_step"] // 1000
 train_df["global_step_10k"] = train_df["global_step"] // 10000
+print("")
 
 """test_df = pd.concat([baseline_test_df, pain_test_df])
 test_df.set_index("global_step")

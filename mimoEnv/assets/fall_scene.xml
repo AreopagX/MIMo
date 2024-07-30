@@ -80,4 +80,13 @@
 		
 
     </worldbody>
+
+    <custom>
+        <text name="a" data="text a"/>
+        <numeric name="v" data="0.5"/>
+        <tuple name="my_test">
+            <element objtype="text" objname="a"/>
+            <element objtype="numeric" objname="v"/>
+        </tuple>
+    </custom>
 </mujoco>

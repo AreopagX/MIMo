@@ -28,7 +28,7 @@ import argparse
 import cv2
 import numpy as np
 import stable_baselines3.common.logger
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.logger import TensorBoardOutputFormat
 
 import mimoEnv
@@ -43,6 +43,8 @@ class InfoWriter:
         self.buffer = []
 
     def flush(self):
+        if len(self.buffer) == 0:
+            return
         write_header = not self.file.exists()
         with open(self.file, "a") as f:
             csv_writer = csv.DictWriter(f, fieldnames=self.buffer[0].keys())
@@ -98,8 +100,8 @@ class InfoWriterCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         data = self.locals["infos"][0]["logging"]
-        data = {f"train.{key}": value for key, value in data.items()}
-        data[f"train.global_step"] = self.global_step
+        data = {f"{key}": value for key, value in data.items()}
+        data[f"global_step"] = self.global_step
         self.writer.append(data)
         self.global_step += 1
         return True
@@ -127,7 +129,7 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
 
     #tb_formatter = next(formatter for formatter in model.logger.output_formats if isinstance(formatter,
     #                                                                                         TensorBoardOutputFormat))
-    info_writer = InfoWriter(f"{save_dir}/test_info.csv")
+    info_writer = InfoWriter(f"{save_dir}/info.csv")
 
     for idx in range(test_for):
         if model is None:
@@ -139,8 +141,8 @@ def test(env, save_dir, test_for=1000, model=None, render_video=False):
         #for key, value in info["logging"].items():
         #tb_formatter.write(info["logging"], {}, idx)
         data = info["logging"]
-        data = {f"test.{key}": value for key, value in data.items()}
-        data["test.global_step"] = idx
+        data = {f"{key}": value for key, value in data.items()}
+        data["global_step"] = idx
         #tb_formatter.writer.add_scalars("info", data, idx)
         info_writer.append(data)
 
@@ -202,7 +204,7 @@ def main():
                         help='RL algorithm from Stable Baselines3')
     parser.add_argument('--load_model', default=False, type=str,
                         help='Name of model to load')
-    parser.add_argument('--save_model', default='', type=str,
+    parser.add_argument('--save_model', default='model', type=str,
                         help='Name of model to save')
     parser.add_argument('--render_video', action='store_true',
                         help='Renders a video for each episode during the test run.')
@@ -258,18 +260,21 @@ def main():
                    verbose=1)
 
     # train model
-    counter = 0
-    global_step = 0
-    while train_for > 0:
-        counter += 1
-        train_for_iter = min(train_for, save_every)
-        train_for = train_for - train_for_iter
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False,
-                    callback=InfoWriterCallback(f"{save_dir}/train_info.csv", global_step))
-        model.save(os.path.join(save_dir, "model_" + str(counter)))
-        global_step += train_for_iter
+    model.learn(
+        total_timesteps=train_for, reset_num_timesteps=False,
+        callback=[
+            InfoWriterCallback(f"{save_dir}/train_info.csv", 0),
+            CheckpointCallback(
+                save_freq=save_every,
+                save_path=save_dir,
+                name_prefix=save_model,
+            )
+        ]
+    )
 
-    test(env, save_dir, model=model, test_for=test_for, render_video=render)
+    model.save(os.path.join(save_dir, "model_final"))
+
+    # test(env, save_dir, model=model, test_for=test_for, render_video=render)
 
 
 if __name__ == '__main__':
