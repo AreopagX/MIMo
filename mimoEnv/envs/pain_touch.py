@@ -41,7 +41,7 @@ class PainTouch(TrimeshTouch):
             pain_ema_new_values=1.0,
             softness_by_name={},
             **kwargs):
-        self.old_sensor_obs = {}
+        self.old_sensor_obs = None
 
         self.pain_threshold = pain_threshold
         self.pain_slope = pain_slope
@@ -99,8 +99,11 @@ class PainTouch(TrimeshTouch):
         Returns:
             np.ndarray: An array of shape (1,) with the normal force.
         """
-        force_magnitude = self.get_raw_force(contact_id, body_id)[0]
-        return np.abs(force_magnitude).reshape((1,))
+        #force_magnitude = self.get_raw_force(contact_id, body_id)[0]
+        #return np.abs(force_magnitude).reshape((1,))
+        normal_forces = self.normal_force(contact_id, body_id)
+        normal = np.sqrt(np.power(normal_forces, 2).sum()).reshape((1,))
+        return normal
 
     def get_touch_obs(self):
         """ Produces the current pain sensor outputs.
@@ -119,21 +122,16 @@ class PainTouch(TrimeshTouch):
         Returns:
             np.ndarray: An array containing all the pain sensations.
         """
-        #
-        if len(self.old_sensor_obs) == 0:
-            self.old_sensor_obs = self.get_empty_sensor_dict(self.touch_size)
+        # get touch sensations
+        touch_obs = super().get_touch_obs()
 
-        # store the current touch observations in self.sensor_outputs
-        super().get_touch_obs()
+        # needed during initialization
+        if self.old_sensor_obs is None:
+            self.old_sensor_obs = np.zeros_like(touch_obs)
 
-        for key in self.sensor_outputs.keys():
-            # thresholding
-            self.sensor_outputs[key] = np.maximum(self.sensor_outputs[key] - self.pain_threshold, 0.0)
-            # decaying sensation
-            self.sensor_outputs[key] = self.old_sensor_obs[key] = \
-                np.maximum(
-                    self.pain_decay_old_values * self.old_sensor_obs[key],
-                    self.pain_decay_new_values * self.sensor_outputs[key]
-            )
-        sensor_obs = self.flatten_sensor_dict(self.old_sensor_obs)
-        return sensor_obs
+        pain_obs = np.maximum(touch_obs - self.pain_threshold, 0.0)
+        pain_obs = np.maximum(
+            self.pain_decay_old_values * self.old_sensor_obs,
+            self.pain_decay_new_values * pain_obs
+        )
+        return pain_obs
