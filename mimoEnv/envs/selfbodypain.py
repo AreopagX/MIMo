@@ -243,9 +243,7 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
         )
         contact_with_fingers = (fingers_touch_max > 0)
 
-        # pain_penalty =  # v1
-        # pain_penalty = ((self.get_pain_obs().max() // 10) + 1) * 10 # v2
-        pain_penalty = 50.0 * (self.get_pain_obs().max() > 0.0)
+        pain_penalty = self.get_pain_obs().max()
 
         # compute reward:
         if info["is_success"]:
