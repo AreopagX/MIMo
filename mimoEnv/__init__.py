@@ -34,6 +34,11 @@ register(id='MIMoSelfBody-v0',
          max_episode_steps=500, 
          )
 
+register(id='MIMoSelfBodyPain-v0',
+         entry_point='mimoEnv.envs:MIMoSelfBodyPainEnv',
+         max_episode_steps=500,
+         )
+
 register(id='MIMoCatch-v0',
          entry_point='mimoEnv.envs:MIMoCatchEnv',
          max_episode_steps=800,

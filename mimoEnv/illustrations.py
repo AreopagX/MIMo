@@ -99,7 +99,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', required=True,
-                        choices=['reach', 'standup', 'selfbody', 'catch'],
+                        choices=['reach', 'standup', 'selfbody', 'catch', 'pain'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch"')
     parser.add_argument('--train_for', default=0, type=int,
@@ -132,13 +132,16 @@ def main():
     use_muscle = args.use_muscle
 
     save_dir = os.path.join("models", env_name, save_model)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
     env_names = {"reach": "MIMoReach-v0",
                  "standup": "MIMoStandup-v0",
                  "selfbody": "MIMoSelfBody-v0",
-                 "catch": "MIMoCatch-v0"}
+                 "catch": "MIMoCatch-v0",
+                 "pain": "MIMoSelfBodyPain-v0"}
 
     env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
