@@ -143,7 +143,7 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
                  actuation_model=SpringDamperModel,
                  goals_in_observation=True,
                  done_active=True,
-                 randomize_qpos=True,
+                 randomize_qpos=False,
                  **kwargs,
                  ):
 
@@ -169,35 +169,6 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
 
     def get_pain_obs(self):
         obs = self.pain.get_touch_obs()
-        """body_names = list(PAIN_PARAMS["scales"].keys())
-        for body_name in body_names:
-            body_id = env_utils.get_body_id(self.pain.m_model, body_name=body_name)
-            output = self.pain.sensor_outputs[body_id]
-
-            omin = output.min()
-            oavg = output.mean()
-            omax = output.max()
-            if body_name in self.pain_observations.keys():
-                self.pain_observations[body_name].append((omin, oavg, omax))
-            else:
-                self.pain_observations[body_name] = [(omin, oavg, omax)]"""
-        return obs
-
-    def get_touch_obs(self):
-        obs = super().get_touch_obs()
-        """body_names = list(TOUCH_PARAMS["scales"].keys())
-        for body_name in body_names:
-            body_id = env_utils.get_body_id(self.touch.m_model, body_name=body_name)
-            output = self.touch.sensor_outputs[body_id]
-            output = np.sqrt(np.power(output, 2).sum(axis=-1))
-            # self.summary_writer.add_scalars(f"episode {self.episode}/{body_name}", {str(idx): output[idx] for idx in range(len(output))}, self.steps)  # too many open files
-            omin = output.min()
-            oavg = output.mean()
-            omax = output.max()
-            if body_name in self.touch_observations.keys():
-                self.touch_observations[body_name].append((omin, oavg, omax))
-            else:
-                self.touch_observations[body_name] = [(omin, oavg, omax)]"""
         return obs
 
     def _set_observation_space(self):
@@ -247,25 +218,18 @@ class MIMoSelfBodyPainEnv(MIMoSelfBodyEnv):
 
         # compute reward:
         if info["is_success"]:
-            reward = 500 - pain_penalty
-
-            self.logging_values["reward"] = reward
-            self.logging_values["reward.without_pain"] = 500
-            self.logging_values["reward.pain_penalty"] = pain_penalty
+            reward = 500
         elif contact_with_fingers:
             target_body_pos = self.data.body(self.target_body).xpos
             fingers_pos = self.data.body("right_fingers").xpos
             distance = np.linalg.norm(fingers_pos - target_body_pos)
-            reward = - distance - pain_penalty
-
-            self.logging_values["reward"] = reward
-            self.logging_values["reward.without_pain"] = -distance
-            self.logging_values["reward.pain_penalty"] = pain_penalty
+            reward = - distance
         else:
             reward = -1
-            self.logging_values["reward"] = reward
-            self.logging_values["reward.without_pain"] = reward
-            self.logging_values["reward.pain_penalty"] = 0
+        self.logging_values["reward.without_pain"] = reward
+        self.logging_values["reward.pain_penalty"] = pain_penalty
+        reward -= pain_penalty
+        self.logging_values["reward"] = reward
 
         return reward
 
