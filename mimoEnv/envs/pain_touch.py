@@ -5,27 +5,52 @@ from mimoTouch.touch import TrimeshTouch
 
 
 class PainTouch(TrimeshTouch):
-    PAIN_THRESHOLD = 200.0
-    PAIN_SLOPE = 0.1
-    PAIN_OLD_VALUES_FACTOR = 0.0
-    PAIN_NEW_VALUES_FACTOR = 1.0
+    """ A pain sensor based on the :class:`mimoTouch.touch.TrimeshTouch`.
+
+    See :class:`mimoTouch.touch.TrimeshTouch` for an overview how the touch sensor works.
+
+    The pain sensations are computed using the magnitudes of normal forces that are sensed at parts of MIMo's body.
+    The magnitudes are first scaled by :attr:`pain_slope` and then optionally by a material softness score as defined in
+    :attr:`softness_by_name` (see :func:`get_raw_force`).
+
+    The :attr:`pain_threshold` is then subtracted from the absolute magnitude, and only values greater than zero are
+    kept. The resulting values are fed through a decaying mechanism, which is calculated as the maximum of the scaled
+    old and new sensations. The parameters :attr:`pain_decay_old_values` and :attr:`pain_decay_new_values` are used for
+    that matter. (See :func:`normal` and :func:`get_touch_obs`)
+
+    The following attributes are provided in addition to those of :class:`mimoTouch.touch.TrimeshTouch`.
+
+    Attributes:
+        pain_threshold (float): Only touch sensations greater than this threshold will create painful sensations.
+        pain_slope (float): A number which scales the pain sensations.
+        pain_decay_old_values (float): A factor by which the old sensations are weighted in the decay.
+        pain_decay_new_values (float): A factor by which the new sensations are weighted in the decay.
+        softness_by_name (Dict[str, float]): A dictionary that maps softness coefficients to body names.
+            These coefficients influence the calculation of the forces :func:`.get_raw_force`.
+            If no value for a body is provided a scale of 1.0 is used.
+        """
 
     VALID_TOUCH_TYPES = {"normal": 1}
-    softness_by_name = {
-    }
-    softness_by_geom_id = {}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+            self,
+            *args,
+            pain_threshold=20,
+            pain_slope=0.1,
+            pain_ema_old_values=0.0,
+            pain_ema_new_values=1.0,
+            softness_by_name={},
+            **kwargs):
         self.old_sensor_obs = {}
+
+        self.pain_threshold = pain_threshold
+        self.pain_slope = pain_slope
+        self.pain_decay_old_values = pain_ema_old_values
+        self.pain_decay_new_values = pain_ema_new_values
+        self.softness_by_name = softness_by_name
+        self.softness_by_geom_id = {}
+
         super().__init__(*args, **kwargs)
-        self.old_sensor_obs = self.get_empty_sensor_dict(self.touch_size)
-
-        """text_start = self.m_model.text_adr
-        text_end = self.m_model.text_size
-        self.m_model.text_data[text_start[0]:text_end[0]]"""
-
-        #env.model.name_textadr
-        #self.m_model.numeric(0).name
 
         for name in self.softness_by_name.keys():
             ids = env_utils.get_geoms_for_body(self.m_model, body_id=self.m_data.body(name).id)
@@ -37,6 +62,9 @@ class PainTouch(TrimeshTouch):
 
         By convention the normal force points away from the first geom listed, so the forces are inverted if the first
         geom is the sensing geom.
+
+        The forces are scaled using the :attr:`PAIN_SLOPE` attribute. Additionally, different material softnesses can
+        be emulated by providing scaling factors in :attr:`softness_by_name` during initialization.
 
         Args:
             contact_id (int): The ID of the contact.
@@ -50,34 +78,62 @@ class PainTouch(TrimeshTouch):
         mujoco.mj_contactForce(self.m_model, self.m_data, contact_id, forces)
         contact = self.m_data.contact[contact_id]
         if contact.geom1 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
-            forces *= -self.PAIN_SLOPE  # Convention is that normal points away from geom1
+            forces *= -self.pain_slope  # convention is that normal points away from geom1
             forces *= self.softness_by_geom_id.get(contact.geom2, 1.0)  # multiply with a softness-based factor
         elif contact.geom2 in env_utils.get_geoms_for_body(self.m_model, body_id=body_id):
-            forces *= self.PAIN_SLOPE
+            forces *= self.pain_slope
             forces *= self.softness_by_geom_id.get(contact.geom1, 1.0)  # multiply with a softness-based factor
         else:
             RuntimeError("Mismatch between contact and body")
         return forces[:3]
 
     def normal(self, contact_id, body_id):
-        normal_forces = self.normal_force(contact_id, body_id)
-        normal = np.sqrt(np.power(normal_forces, 2).sum()).reshape((1,))
-        return normal
+        """ Pain function. Returns pain sensation of the body.
+
+        Pain sensations are the absolute magnitude of the normal forces on the contact body.
+
+        Args:
+            contact_id (int): The ID of the contact.
+            body_id (int): The ID of the body.
+
+        Returns:
+            np.ndarray: An array of shape (1,) with the normal force.
+        """
+        force_magnitude = self.get_raw_force(contact_id, body_id)[0]
+        return np.abs(force_magnitude).reshape((1,))
 
     def get_touch_obs(self):
-        if len(self.old_sensor_obs) == 0:
-            return super().get_touch_obs()
-        super().get_touch_obs()
-        for key in self.sensor_outputs.keys():
-            #self.sensor_outputs[key] = \
-            #    np.maximum(self.sensor_outputs[key] - self.PAIN_THRESHOLD, 0.0) * np.ones_like(self.sensor_outputs[key])
+        """ Produces the current pain sensor outputs.
 
-            #self.old_sensor_obs[key] = (1 - self.alpha) * self.old_sensor_obs[key] + self.alpha * self.sensor_outputs[key]
-            new_value = np.maximum(
-                self.PAIN_OLD_VALUES_FACTOR * self.old_sensor_obs[key],
-                self.PAIN_NEW_VALUES_FACTOR * self.sensor_outputs[key]
+        Does the full contact getting-processing process, such that we get the forces, as determined by
+        :attr:`.touch_type` and :attr:`.response_type`, for each sensor. :attr:`.touch_function` is called to compute
+        the raw output force, which is then distributed over the sensors using :attr:`.response_function`.
+
+        The indices of the output dictionary :attr:`~mimoTouch.touch.TrimeshTouch.sensor_outputs` and the sensor
+        dictionary :attr:`.sensor_positions` are aligned, such that the ith sensor on `body` has position
+        ``.sensor_positions[body][i]`` and output in ``.sensor_outputs[body][i]``.
+
+        This method first thresholds the forces using :attr:`.PAIN_THRESHOLD`, then simulates a decaying pain using old
+        and current pain sensations.
+
+        Returns:
+            np.ndarray: An array containing all the pain sensations.
+        """
+        #
+        if len(self.old_sensor_obs) == 0:
+            self.old_sensor_obs = self.get_empty_sensor_dict(self.touch_size)
+
+        # store the current touch observations in self.sensor_outputs
+        super().get_touch_obs()
+
+        for key in self.sensor_outputs.keys():
+            # thresholding
+            self.sensor_outputs[key] = np.maximum(self.sensor_outputs[key] - self.pain_threshold, 0.0)
+            # decaying sensation
+            self.sensor_outputs[key] = self.old_sensor_obs[key] = \
+                np.maximum(
+                    self.pain_decay_old_values * self.old_sensor_obs[key],
+                    self.pain_decay_new_values * self.sensor_outputs[key]
             )
-            self.old_sensor_obs[key] = new_value
-            self.sensor_outputs[key] = self.old_sensor_obs[key]
         sensor_obs = self.flatten_sensor_dict(self.old_sensor_obs)
         return sensor_obs
