@@ -25,6 +25,8 @@ import time
 import argparse
 import cv2
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.env_util import make_vec_env
 
 from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
@@ -119,6 +121,8 @@ def main():
                         help='Renders a video for each episode during the test run.')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
+    parser.add_argument('--nenvs', type=int, default=1,
+                        help='How many environments to run in parallel.')
     
     args = parser.parse_args()
     env_name = args.env
@@ -143,7 +147,11 @@ def main():
                  "catch": "MIMoCatch-v0",
                  "pain": "MIMoSelfBodyPain-v0"}
 
-    env = gym.make(env_names[env_name], actuation_model=actuation_model)
+    if args.nenvs > 1:
+        env = make_vec_env(env_names[env_name], n_envs=args.nenvs, vec_env_cls=SubprocVecEnv,
+                               env_kwargs=dict(actuation_model=actuation_model))
+    else:
+        env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
 
     if algorithm == 'PPO':
