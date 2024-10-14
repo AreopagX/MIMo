@@ -24,8 +24,10 @@ import gymnasium as gym
 import time
 import argparse
 import cv2
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.env_util import make_vec_env
 
-import mimoEnv
 from mimoEnv.envs.mimo_env import MIMoEnv
 from mimoActuation.actuation import SpringDamperModel
 from mimoActuation.muscle import MuscleModel
@@ -99,7 +101,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', required=True,
-                        choices=['reach', 'standup', 'selfbody', 'catch'],
+                        choices=['reach', 'standup', 'selfbody', 'catch', 'pain'],
                         help='The demonstration environment to use. Must be one of "reach", "standup", "selfbody", '
                              '"catch"')
     parser.add_argument('--train_for', default=0, type=int,
@@ -119,6 +121,8 @@ def main():
                         help='Renders a video for each episode during the test run.')
     parser.add_argument('--use_muscle', action='store_true',
                         help='Use the muscle actuation model instead of spring-damper model if provided.')
+    parser.add_argument('--nenvs', type=int, default=1,
+                        help='How many environments to run in parallel.')
     
     args = parser.parse_args()
     env_name = args.env
@@ -132,15 +136,22 @@ def main():
     use_muscle = args.use_muscle
 
     save_dir = os.path.join("models", env_name, save_model)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
     actuation_model = MuscleModel if use_muscle else SpringDamperModel
 
     env_names = {"reach": "MIMoReach-v0",
                  "standup": "MIMoStandup-v0",
                  "selfbody": "MIMoSelfBody-v0",
-                 "catch": "MIMoCatch-v0"}
+                 "catch": "MIMoCatch-v0",
+                 "pain": "MIMoSelfBodyPain-v0"}
 
-    env = gym.make(env_names[env_name], actuation_model=actuation_model)
+    if args.nenvs > 1:
+        env = make_vec_env(env_names[env_name], n_envs=args.nenvs, vec_env_cls=SubprocVecEnv,
+                               env_kwargs=dict(actuation_model=actuation_model))
+    else:
+        env = gym.make(env_names[env_name], actuation_model=actuation_model)
     env.reset()
 
     if algorithm == 'PPO':
@@ -165,13 +176,17 @@ def main():
                    verbose=1)
 
     # train model
-    counter = 0
-    while train_for > 0:
-        counter += 1
-        train_for_iter = min(train_for, save_every)
-        train_for = train_for - train_for_iter
-        model.learn(total_timesteps=train_for_iter, reset_num_timesteps=False)
-        model.save(os.path.join(save_dir, "model_" + str(counter)))
+    model.learn(
+        total_timesteps=train_for, reset_num_timesteps=False,
+        callback=[
+            CheckpointCallback(
+                save_freq=save_every,
+                save_path=save_dir,
+                name_prefix="model",
+            )
+        ]
+    )
+    model.save(os.path.join(save_dir, "model_final"))
 
     test(env, save_dir, model=model, test_for=test_for, render_video=render)
 
